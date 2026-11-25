@@ -1,0 +1,218 @@
+* ==============================================================================
+* Infineon / International Rectifier IRS21844(S)PbF Half-Bridge Gate Driver
+* High-Accuracy Datasheet-Matched Behavioral LTspice Library Model
+* Reference Datasheet: Infineon PD60252 revA (IRS2184/IRS21844(S)PbF)
+*
+* Pin Order (Matched to User's Custom LTspice Symbol):
+*   1: IN   - Logic input for HO & LO (in phase with HO, referenced to VSS)
+*   2: SD   - Logic input for active-low shutdown (SD_bar, referenced to VSS)
+*   3: VSS  - Logic ground (-5 V to +5 V offset relative to COM)
+*   4: DT   - Programmable deadtime pin (connect external R_DT from DT to VSS)
+*   5: COM  - Low-side power return
+*   6: LO   - Low-side gate drive output (0 V to VCC relative to COM)
+*   7: VCC  - Low-side and logic fixed supply (10 V to 20 V relative to COM)
+*   8: VS   - High-side floating supply return (COM - 8 V to +600 V)
+*   9: HO   - High-side gate drive output (VS to VB)
+*  10: VB   - High-side floating supply (VS + 10 V to VS + 20 V)
+* ==============================================================================
+
+.SUBCKT IRS21844 IN SD VSS DT COM LO VCC VS HO VB
+
+* ------------------------------------------------------------------------------
+* 1. Thermal & Datasheet Nominal Scaling Parameters (TA = 25 C, VBIAS = 15 V)
+* ------------------------------------------------------------------------------
+* Temperature scaling factors extracted from Figures 13A-33A:
+.param TF_TOFF = {limit(1 + 0.00333*(temp - 25), 0.65, 1.50)}
+.param TF_TSD  = {limit(1 + 0.00306*(temp - 25), 0.65, 1.50)}
+.param TF_TR   = {limit(1 + 0.00600*(temp - 25), 0.50, 1.75)}
+.param TF_TF   = {limit(1 + 0.00500*(temp - 25), 0.50, 1.75)}
+.param TF_DT   = {limit(1 - 0.00078*(temp - 25), 0.85, 1.15)}
+.param TF_IQCC = {limit(1 - 0.00050*(temp - 25), 0.80, 1.20)}
+.param TF_IQBS = {limit(1 + 0.00417*(temp - 25), 0.60, 1.60)}
+.param TF_ROUT = {limit(1 + 0.00350*(temp - 25), 0.75, 1.45)}
+.param UV_TEMP = {0.002*(temp - 25)}
+
+* Output stage on-resistances @ 15 V, 25 C:
+* IO+ = 1.9 A typ -> RSRC0 = 15 V / 1.9 A = 7.8947 Ohm
+* IO- = 2.3 A typ -> RSNK0 = 15 V / 2.3 A = 6.5217 Ohm (VOL = 0.13 V @ 20 mA < 0.2 V max)
+.param RSRC0 = {7.8947 * TF_ROUT}
+.param RSNK0 = {6.5217 * TF_ROUT}
+
+* Pre-driver RC time constants calibrated for CL = 1000 pF:
+* tr (10% to 90%) = 40.0 ns typ @ 15 V, 25 C -> TAU_R0 = 14.3359 ns
+* tf (90% to 10%) = 20.0 ns typ @ 15 V, 25 C -> TAU_F0 =  5.6560 ns
+.param TAU_R0 = {14.3359n * TF_TR}
+.param TAU_F0 = {5.6560n  * TF_TF}
+
+* ------------------------------------------------------------------------------
+* 2. Input Stage (IN & SD Referenced to VSS, Fig. 19-22, Fig. 28-29)
+* ------------------------------------------------------------------------------
+* IN has 200 kOhm pull-down to VSS -> IIN+ = 25 uA typ @ IN = 5 V (Page 4 & Page 5)
+R_IN_PD  IN VSS 200k
+C_IN_PAR IN VSS 2p
+
+* SD (active-low shutdown) has internal 200 kOhm pull-up to internal 5 V logic rail
+* so floating SD defaults to HIGH (enabled) and IIN = 25 uA when SD = 0 V (Page 5)
+B_V5_REG N_V5_VSS VSS V=limit(V(VCC,VSS), 0, 5.0)
+R_SD_PU  N_V5_VSS SD 200k
+C_SD_PAR SD VSS 2p
+
+* Input ESD / clamping diodes (VSS - 0.3 V to VCC + 0.3 V, Page 2)
+D_IN_VSS VSS IN       D_ESD
+D_IN_VCC IN  VCC      D_ESD
+D_SD_VSS VSS SD       D_ESD
+D_SD_VCC SD  VCC      D_ESD
+D_DT_VSS VSS N_DT_INT D_ESD
+D_DT_VCC N_DT_INT VCC D_ESD
+
+* Normalize IN and SD voltages relative to VSS for Schmitt Trigger A-devices
+* VIH min = 2.5 V, VIL max = 0.8 V (3.3 V and 5 V CMOS/LSTTL compatible)
+* Rising threshold = Vt + Vh = 1.65 + 0.45 = 2.10 V (< 2.5 V)
+* Falling threshold = Vt - Vh = 1.65 - 0.45 = 1.20 V (> 0.8 V)
+B_VIN_REF N_VIN_REF 0 V=V(IN,VSS)
+B_VSD_REF N_VSD_REF 0 V=V(SD,VSS)
+
+A_SCH_IN N_VIN_REF 0 0 0 0 N_IN_BAR N_IN_DIG 0 SCHMITT Vt=1.65 Vh=0.45 Vhigh=1 Vlow=0 Trise=1n Tfall=1n tripdt=0.5n
+A_SCH_SD N_VSD_REF 0 0 0 0 N_SD_BAR N_SD_DIG 0 SCHMITT Vt=1.65 Vh=0.45 Vhigh=1 Vlow=0 Trise=1n Tfall=1n tripdt=0.5n
+
+* ------------------------------------------------------------------------------
+* 3. Undervoltage Lockout (UVLO) & Static Supply Characteristics (Page 4, Fig. 25-31)
+* ------------------------------------------------------------------------------
+* VCCUV+ = VBSUV+ = 8.9 V typ, VCCUV- = VBSUV- = 8.2 V typ, Hysteresis = 0.7 V typ
+* Temperature drift UV_TEMP is applied on the reference B-sources so the A-device
+* Schmitt triggers use pure constant numeric parameters for strict LTspice 26 compatibility.
+B_VVCC_REF N_VVCC_REF 0 V=V(VCC,COM) - UV_TEMP
+B_VVBS_REF N_VVBS_REF 0 V=V(VB,VS)   - UV_TEMP
+
+A_UV_VCC N_VVCC_REF 0 0 0 0 0 N_VCC_OK 0 SCHMITT Vt=8.55 Vh=0.35 Vhigh=1 Vlow=0 Trise=5n Tfall=5n tripdt=2n
+A_UV_VBS N_VVBS_REF 0 0 0 0 0 N_VBS_OK 0 SCHMITT Vt=8.55 Vh=0.35 Vhigh=1 Vlow=0 Trise=5n Tfall=5n tripdt=2n
+
+* Quiescent supply currents:
+* IQCC = 1.0 mA typ @ VCC = 15 V (Fig. 27A/B); compensated for internal DT bias current
+B_IQCC VCC COM I=limit(V(VCC,COM)/10, 0, 1) * limit((0.80m + 0.07m*(V(VCC,COM)-15))*TF_IQCC, 0.2m, 2.5m)
+* IQBS = 60 uA typ @ VBS = 15 V (Fig. 26A/B)
+B_IQBS VB  VS  I=limit(V(VB,VS)/10, 0, 1) * limit((60u + 5u*(V(VB,VS)-15))*TF_IQBS, 15u, 200u)
+
+* Offset supply leakage current ILK (< 50 uA @ 600 V, Fig. 25A/B) & floating node DC path
+R_LK_VB  VB  COM 120Meg
+R_LK_VS  VS  COM 120Meg
+R_VSS_CM VSS COM 10Meg
+
+* Internal 20 V supply clamps (Page 2 Note 1) & VSS-COM offset clamp
+D_CLAMP_VCC COM VCC D_Z20V
+D_CLAMP_VBS VS  VB  D_Z20V
+D_CLAMP_VSS1 COM VSS D_Z6V
+D_CLAMP_VSS2 VSS COM D_Z6V
+
+* ------------------------------------------------------------------------------
+* 4. Continuous Function Deadtime Programming via External Variable R_DT
+*    (DT Pin Referenced to VSS, Page 3 & Fig. 18A/B/C)
+* ------------------------------------------------------------------------------
+* External resistor R_DT (fixed, stepped, or dynamically time-varying/potentiometer)
+* is connected between DT and VSS (or DT shorted to VSS for R_DT = 0 Ohm).
+* Internal 5.0 V bias feeds N_DT_INT through R_DT_INT = 25 kOhm, and V_DT_SNS is
+* placed directly at the DT pin terminal so I(V_DT_SNS) senses the exact external
+* resistor current without internal capacitance or diode leakage interference.
+R_DT_INT N_V5_VSS N_DT_INT 25k
+C_DT_PAR N_DT_INT VSS 2p
+V_DT_SNS N_DT_INT DT 0
+
+* Continuous mathematical functions for instantaneous external resistance R_DT (Ohms)
+* and resulting Deadtime t_DT (microseconds) across any variable resistor value:
+*   F_RDT_OHM(v_dt, i_dt)        = V(DT,VSS) / I(V_DT_SNS)   [in Ohms, continuous]
+*   F_DT_US(r_dt_ohm, vcc, tf_dt) = (0.400 + 2.3e-5 * R_DT) * TF_DT * KV_VCC   [in us]
+.func F_RDT_OHM(v_dt, i_dt) {limit(max(0, v_dt) / max(10n, i_dt), 0, 500k)}
+.func F_DT_US(r_dt_ohm, v_vcc, tf_dt) {limit((0.400 + 2.3e-5 * r_dt_ohm) * tf_dt * (1 - 0.010*(limit(v_vcc, 10, 20) - 15)), 0.20, 12.0)}
+
+* Continuous evaluation of external resistance R_DT (Ohms) and Deadtime (1 V = 1 us):
+B_RDT_OHM N_RDT_OHM 0 V=F_RDT_OHM(V(DT,VSS), I(V_DT_SNS))
+B_TDT_US  N_TDT_US  0 V=F_DT_US(V(N_RDT_OHM), V(VCC,COM), TF_DT)
+
+* ------------------------------------------------------------------------------
+* 5. Cross-Conduction Prevention & Asymmetric Deadtime Timers (Page 5 & Fig. 4)
+* ------------------------------------------------------------------------------
+* Turn-on edge is delayed by Deadtime; turn-off edge bypasses Deadtime immediately.
+* +0.0174 us (17.4 ns) pre-driver/fall-time offset ensures that Deadtime measured
+* from 10% of falling output to 10% of rising output (Fig. 4) equals V(N_TDT_US) exactly.
+* Smooth saturation windows at V=0 and V=1 guarantee fast, chatter-free Newton-Raphson convergence.
+C_DT_HS N_TIM_DT_HS 0 1n Rpar=1G
+B_DT_HS 0 N_TIM_DT_HS I=if(V(N_IN_DIG)>0.5, (0.5m/(0.0174 + V(N_TDT_US)))*limit((1 - V(N_TIM_DT_HS))/0.02, -10, 1), -25m*limit(V(N_TIM_DT_HS)/0.02, -10, 1))
+
+C_DT_LS N_TIM_DT_LS 0 1n Rpar=1G
+B_DT_LS 0 N_TIM_DT_LS I=if(V(N_IN_BAR)>0.5, (0.5m/(0.0174 + V(N_TDT_US)))*limit((1 - V(N_TIM_DT_LS))/0.02, -10, 1), -25m*limit(V(N_TIM_DT_LS)/0.02, -10, 1))
+
+A_CMP_DT_HS N_TIM_DT_HS 0 0 0 0 0 N_DT_HS_OUT 0 SCHMITT Vt=0.50 Vh=0.005 Vhigh=1 Vlow=0 Trise=0.5n Tfall=0.5n tripdt=0.2n
+A_CMP_DT_LS N_TIM_DT_LS 0 0 0 0 0 N_DT_LS_OUT 0 SCHMITT Vt=0.50 Vh=0.005 Vhigh=1 Vlow=0 Trise=0.5n Tfall=0.5n tripdt=0.2n
+
+* Immediate turn-off gating (cross-conduction prevention logic):
+B_HS_POST_DT N_HS_POST_DT 0 V=if(V(N_IN_DIG)>0.5 & V(N_DT_HS_OUT)>0.5, 1, 0)
+B_LS_POST_DT N_LS_POST_DT 0 V=if(V(N_IN_BAR)>0.5 & V(N_DT_LS_OUT)>0.5, 1, 0)
+
+* ------------------------------------------------------------------------------
+* 6. Matched Channel Propagation Delay (toff = 270 ns, ton = 680 ns) & SD Delay (tsd = 180 ns)
+* ------------------------------------------------------------------------------
+* Supply voltage scaling for propagation delays (Fig. 13B, 14B, 15B):
+* toff = 270.0 ns (50% IN to 90% OUT): pre-driver fall to 90% takes 3.2 ns -> delay = 266.8 ns
+* tsd  = 180.0 ns (50% SD to 90% OUT): pre-driver fall to 90% takes 3.2 ns -> delay = 176.8 ns
+B_TDEL_CH N_TDEL_CH 0 V=limit(0.2668 * TF_TOFF * (1 - 0.0222*(limit(V(VCC,COM),10,20) - 15)), 0.10, 0.60)
+B_TDEL_SD N_TDEL_SD 0 V=limit(0.1768 * TF_TSD  * (1 - 0.0194*(limit(V(VCC,COM),10,20) - 15)), 0.08, 0.45)
+
+* Symmetric propagation delay timers for High-Side, Low-Side, and Shutdown channels:
+C_PROP_HS N_TIM_PROP_HS 0 1n Rpar=1G
+B_PROP_HS 0 N_TIM_PROP_HS I=if(V(N_HS_POST_DT)>0.5, (0.5m/V(N_TDEL_CH))*limit((1 - V(N_TIM_PROP_HS))/0.02, -10, 1), -(0.5m/V(N_TDEL_CH))*limit(V(N_TIM_PROP_HS)/0.02, -10, 1))
+A_CMP_PROP_HS N_TIM_PROP_HS 0 0 0 0 0 N_PROP_HS_OUT 0 SCHMITT Vt=0.50 Vh=0.005 Vhigh=1 Vlow=0 Trise=0.5n Tfall=0.5n tripdt=0.2n
+
+C_PROP_LS N_TIM_PROP_LS 0 1n Rpar=1G
+B_PROP_LS 0 N_TIM_PROP_LS I=if(V(N_LS_POST_DT)>0.5, (0.5m/V(N_TDEL_CH))*limit((1 - V(N_TIM_PROP_LS))/0.02, -10, 1), -(0.5m/V(N_TDEL_CH))*limit(V(N_TIM_PROP_LS)/0.02, -10, 1))
+A_CMP_PROP_LS N_TIM_PROP_LS 0 0 0 0 0 N_PROP_LS_OUT 0 SCHMITT Vt=0.50 Vh=0.005 Vhigh=1 Vlow=0 Trise=0.5n Tfall=0.5n tripdt=0.2n
+
+C_PROP_SD N_TIM_PROP_SD 0 1n Rpar=1G
+B_PROP_SD 0 N_TIM_PROP_SD I=if(V(N_SD_DIG)>0.5, (0.5m/V(N_TDEL_SD))*limit((1 - V(N_TIM_PROP_SD))/0.02, -10, 1), -(0.5m/V(N_TDEL_SD))*limit(V(N_TIM_PROP_SD)/0.02, -10, 1))
+A_CMP_PROP_SD N_TIM_PROP_SD 0 0 0 0 0 N_SD_EN 0 SCHMITT Vt=0.50 Vh=0.005 Vhigh=1 Vlow=0 Trise=0.5n Tfall=0.5n tripdt=0.2n
+
+* ------------------------------------------------------------------------------
+* 7. Final Logic Gating with UVLO, Shutdown & Negative VS Transient Immunity
+* ------------------------------------------------------------------------------
+* High-Side is enabled when: PROP_HS_OUT=1, SD_EN=1, VCC_OK=1, and VBS_OK=1
+* Low-Side is enabled when:  PROP_LS_OUT=1, SD_EN=1, and VCC_OK=1
+* Mutual exclusion lock guarantees HO and LO can never be simultaneously commanded ON
+B_CMD_HO N_CMD_HO 0 V=if(V(N_PROP_HS_OUT)>0.5 & V(N_PROP_LS_OUT)<0.5 & V(N_SD_EN)>0.5 & V(N_VCC_OK)>0.5 & V(N_VBS_OK)>0.5, 1, 0)
+B_CMD_LO N_CMD_LO 0 V=if(V(N_PROP_LS_OUT)>0.5 & V(N_PROP_HS_OUT)<0.5 & V(N_SD_EN)>0.5 & V(N_VCC_OK)>0.5, 1, 0)
+
+* ------------------------------------------------------------------------------
+* 8. Lower di/dt Pre-Driver Slew-Rate Control & Totem-Pole Output Stages (HO, LO)
+* ------------------------------------------------------------------------------
+* Calibrated for tr = 40 ns (10%-90%) and tf = 20 ns (90%-10%) into CL = 1000 pF @ 15 V
+* Includes Supply Voltage scaling of rise/fall times (Fig. 16B & Fig. 17B):
+C_PRE_HO N_PRE_HO 0 1n Rpar=1G
+B_PRE_HO 0 N_PRE_HO I=if(V(N_CMD_HO)>0.5, (1 - V(N_PRE_HO))*1n/(TAU_R0*(1 - 0.055*(limit(V(VB,VS),10,20)-15))), -V(N_PRE_HO)*1n/(TAU_F0*(1 - 0.050*(limit(V(VB,VS),10,20)-15))))
+
+C_PRE_LO N_PRE_LO 0 1n Rpar=1G
+B_PRE_LO 0 N_PRE_LO I=if(V(N_CMD_LO)>0.5, (1 - V(N_PRE_LO))*1n/(TAU_R0*(1 - 0.055*(limit(V(VCC,COM),10,20)-15))), -V(N_PRE_LO)*1n/(TAU_F0*(1 - 0.050*(limit(V(VCC,COM),10,20)-15))))
+
+* High-Side Output Totem-Pole Stage (VB -> HO -> VS):
+* IO+ = 1.9 A typ, IO- = 2.3 A typ @ 15 V (Fig. 32 & 33)
+R_HO_SRC VB HO R=RSRC0 / limit(V(N_PRE_HO), 1u, 1)
+R_HO_SNK HO VS R=RSNK0 / limit(1 - V(N_PRE_HO), 1u, 1)
+D_HO_VB  HO VB D_OUT_BODY
+D_VS_HO  VS HO D_OUT_BODY
+C_HO_PAR HO VS 5p
+
+* Low-Side Output Totem-Pole Stage (VCC -> LO -> COM):
+* IO+ = 1.9 A typ, IO- = 2.3 A typ @ 15 V (Fig. 32 & 33)
+R_LO_SRC VCC LO  R=RSRC0 / limit(V(N_PRE_LO), 1u, 1)
+R_LO_SNK LO  COM R=RSNK0 / limit(1 - V(N_PRE_LO), 1u, 1)
+D_LO_VCC LO  VCC D_OUT_BODY
+D_COM_LO COM LO  D_OUT_BODY
+C_LO_PAR LO  COM 5p
+
+* ------------------------------------------------------------------------------
+* 9. Internal Diode Models
+* ------------------------------------------------------------------------------
+.MODEL D_ESD       D(Is=1e-14 Rs=5 Cjo=1p BV=25 IBV=1m)
+.MODEL D_OUT_BODY  D(Is=1e-12 Rs=0.5 Cjo=5p tt=5n)
+.MODEL D_Z20V      D(Is=1e-14 Rs=1 BV=20.5 IBV=5m)
+.MODEL D_Z6V       D(Is=1e-14 Rs=2 BV=6.0 IBV=1m)
+
+.ENDS IRS21844
+* ==============================================================================
